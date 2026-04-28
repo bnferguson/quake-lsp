@@ -39,6 +39,12 @@ type Diagnostic struct {
 	Severity Severity
 	Message  string
 	Position parser.Position
+
+	// VarName, when non-empty, names the `$<name>` token a consumer
+	// should narrow Position to. Diagnostics for the same task and
+	// VarName are emitted in source order, so the Nth diagnostic
+	// corresponds to the Nth occurrence in the task body.
+	VarName string
 }
 
 // Diagnose builds a SymbolTable and returns every structural problem
@@ -207,6 +213,7 @@ func unresolvedVariables(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnosti
 					Severity: SeverityWarning,
 					Message:  fmt.Sprintf("task %q references undefined variable %q", fqn, ve.Name),
 					Position: t.Position,
+					VarName:  ve.Name,
 				})
 			}
 		}
