@@ -44,6 +44,45 @@ task build => missing {
 	require.True(t, found, "undefined-dependency diagnostic is reported")
 }
 
+func TestDocument_DiagnosticsUndefinedDepNarrowsToToken(t *testing.T) {
+	// Undefined task-dependency diagnostics anchor on the containing
+	// task's Position, so the editor underlines the whole task body.
+	// The LSP layer should narrow to the dep token inside the
+	// `=> ...` list so only "missing" gets the squiggle.
+	src := "task build {\n    echo building\n}\n" +
+		"task ship => build, missing {\n    echo shipping\n}\n"
+	d := parse(testURI, src, 1)
+
+	diags := d.diagnostics()
+	var diag *protocol.Diagnostic
+	for i := range diags {
+		if strings.Contains(diags[i].Message, `"missing"`) {
+			diag = &diags[i]
+			break
+		}
+	}
+	require.NotNil(t, diag, "expected a diagnostic for undefined dep \"missing\"")
+	require.Equal(t, "missing", sliceByRange(src, diag.Range), "diagnostic range covers just the dep token")
+}
+
+func TestDocument_DiagnosticsUndefinedDepHandlesMultipleInOneTask(t *testing.T) {
+	// Two undefined deps in the same task should each get their own
+	// narrow range — not two diagnostics overlapping the whole task.
+	src := "task ship => alpha, beta {\n    echo shipping\n}\n"
+	d := parse(testURI, src, 1)
+
+	var ranges []protocol.Range
+	for _, diag := range d.diagnostics() {
+		if strings.Contains(diag.Message, "undefined task") {
+			ranges = append(ranges, diag.Range)
+		}
+	}
+	require.Len(t, ranges, 2)
+	require.NotEqual(t, ranges[0], ranges[1])
+	got := []string{sliceByRange(src, ranges[0]), sliceByRange(src, ranges[1])}
+	require.ElementsMatch(t, []string{"alpha", "beta"}, got)
+}
+
 func TestDocument_DiagnosticsUnresolvedVariableNarrowsToReference(t *testing.T) {
 	// The parser leaves command-element positions zeroed, so the
 	// analysis layer anchors unresolved-variable diagnostics on the
