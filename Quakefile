@@ -1,0 +1,62 @@
+# Quakefile for the Quakefile language server.
+#
+# Dogfoods what it builds — opening this in Zed with the LSP
+# attached should give you task completion, go-to-definition on
+# $VARS, and a clean diagnostic panel.
+
+VERSION = `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
+BUILD_DIR = "build"
+BINARY = "quake-lsp"
+INSTALL_DIR = `echo "$HOME/bin"`
+
+# Default to a full check — fmt, vet, test. Cheap on a small repo.
+task default => check
+
+task build {
+    @echo "Building $BINARY $VERSION..."
+    mkdir -p $BUILD_DIR
+    go build -ldflags "-X main.version=$VERSION" -o $BUILD_DIR/$BINARY ./cmd/quake-lsp
+    @echo "Built $BUILD_DIR/$BINARY"
+}
+
+# Build and copy into $INSTALL_DIR. This is the path Zed picks up.
+task install => build {
+    @echo "Installing $BINARY to $INSTALL_DIR..."
+    mkdir -p $INSTALL_DIR
+    cp $BUILD_DIR/$BINARY $INSTALL_DIR/$BINARY
+    @echo "Installed $INSTALL_DIR/$BINARY"
+}
+
+task test {
+    go test ./...
+}
+
+task test-verbose {
+    go test -v ./...
+}
+
+task test-coverage {
+    @echo "Running tests with coverage..."
+    go test -coverprofile=coverage.out ./...
+    go tool cover -html=coverage.out -o coverage.html
+    @echo "Wrote coverage.html"
+}
+
+task vet {
+    go vet ./...
+}
+
+task fmt {
+    go fmt ./...
+}
+
+task check => fmt, vet, test
+
+task clean {
+    rm -rf $BUILD_DIR
+    rm -f coverage.out coverage.html
+}
+
+task tidy {
+    go mod tidy
+}

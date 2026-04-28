@@ -1,4 +1,5 @@
 quake-lsp
+build/
 
 coverage.out
 coverage.html
