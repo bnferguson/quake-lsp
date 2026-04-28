@@ -1,0 +1,24 @@
+# Bug: dependency-cycle diagnostics underline the whole first task.
+#
+# `analysis/diagnostics.go:dependencyCycles` anchors on
+# `symbols.Task(cycle[0]).Position` — fine for picking the report
+# site, but it spans the whole task. A reader gets a fat underline
+# across the body without seeing which dep edge actually closes
+# the cycle. Narrowing to the offending dep token in the dep list
+# would point at the real culprit.
+#
+# Expected: underline on the dep edge that closes the cycle (e.g.
+# the `a` in `task c => a`).
+# Actual: the entire `task a { ... }` block underlines.
+
+task a => b {
+    echo a
+}
+
+task b => c {
+    echo b
+}
+
+task c => a {
+    echo c
+}

@@ -1,0 +1,18 @@
+# Bug: undefined task-dependency diagnostics underline the whole task.
+#
+# `analysis/diagnostics.go:undefinedDependencies` anchors on the
+# containing task's Position, which spans the entire `task ship`
+# block. The dep token "missing" is right there in the source —
+# the LSP layer should narrow to it, the same way unresolved-
+# variable diagnostics now do.
+#
+# Expected: underline covers just the word "missing".
+# Actual: the entire `task ship { ... }` block underlines.
+
+task build {
+    echo building
+}
+
+task ship => build, missing {
+    echo shipping
+}

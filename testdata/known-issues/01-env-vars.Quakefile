@@ -1,0 +1,16 @@
+# Bug: shell environment variables are flagged as undefined.
+#
+# The parser emits a VariableElement for any `$NAME`, and the
+# analyzer only knows about Quake-level declarations. So $HOME,
+# $PATH, $USER, $CI, etc. — anything inherited from the calling
+# shell — gets a spurious "undefined variable" warning.
+#
+# Expected: no diagnostics.
+# Actual: every $VAR below underlines as a warning.
+
+task release {
+    echo "publishing as $USER from $HOME"
+    cp build/iso "$HOME/bin/iso"
+    if [ -n "$CI" ]; then echo "running on CI"; fi
+    PATH="$HOME/.local/bin:$PATH" go build ./...
+}
