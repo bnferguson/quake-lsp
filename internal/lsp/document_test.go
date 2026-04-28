@@ -51,22 +51,20 @@ func TestDocument_DiagnosticsUnresolvedVariableNarrowsToReference(t *testing.T) 
 	// `$NAME` token so the editor underlines just the reference, not
 	// the whole task body.
 	src := "task build {\n" +
-		"    commit=$(git rev-parse HEAD)\n" +
-		"    ldflags=\"-X main.commit=$commit\"\n" +
-		"    go build -ldflags \"$ldflags\"\n" +
+		"    echo building $UNKNOWN\n" +
 		"}\n"
 	d := parse(testURI, src, 1)
 
 	diags := d.diagnostics()
 	var diag *protocol.Diagnostic
 	for i := range diags {
-		if strings.Contains(diags[i].Message, `"commit"`) {
+		if strings.Contains(diags[i].Message, `"UNKNOWN"`) {
 			diag = &diags[i]
 			break
 		}
 	}
-	require.NotNil(t, diag, "expected a diagnostic for undefined $commit")
-	require.Equal(t, "commit", sliceByRange(src, diag.Range), "diagnostic range covers just the variable name")
+	require.NotNil(t, diag, "expected a diagnostic for undefined $UNKNOWN")
+	require.Equal(t, "UNKNOWN", sliceByRange(src, diag.Range), "diagnostic range covers just the variable name")
 }
 
 func TestDocument_DiagnosticsUnresolvedVariableHandlesRepeatedReferences(t *testing.T) {

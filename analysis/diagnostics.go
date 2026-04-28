@@ -179,7 +179,16 @@ func dependencyCycles(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnostic {
 }
 
 // unresolvedVariables reports every $VAR reference in a task command
-// that does not resolve to a declared variable or a task argument.
+// that does not resolve to a declared Quake variable, a task
+// argument, or a shell-local assignment from an earlier command in
+// the same task.
+//
+// Shell-locals are recognized heuristically: a leading
+// `IDENT=value` token in any command's flat string is treated as
+// `IDENT` going into scope for subsequent commands. This catches
+// the common patterns `commit=$(git rev-parse HEAD)` and
+// `GOOS=linux GOARCH=amd64 go build ...` without modeling the
+// shell's full grammar.
 //
 // Environment lookups (${VAR} at shell level, {{env.X}} in
 // expressions) are deliberately ignored — their values are runtime
@@ -197,7 +206,21 @@ func unresolvedVariables(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnosti
 			args[a] = struct{}{}
 		}
 
+		shellLocals := make(map[string]struct{})
+
 		for _, cmd := range t.Commands {
+			// Record this command's shell-local assignments before
+			// scanning its variable refs, so `name="$name"` (a
+			// self-reference in an assignment) doesn't warn.
+			for _, elem := range cmd.Elements {
+				se, ok := elem.(parser.StringElement)
+				if !ok {
+					continue
+				}
+				for _, name := range shellAssignments(se.Value) {
+					shellLocals[name] = struct{}{}
+				}
+			}
 			for _, elem := range cmd.Elements {
 				ve, ok := elem.(parser.VariableElement)
 				if !ok {
@@ -207,6 +230,9 @@ func unresolvedVariables(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnosti
 					continue
 				}
 				if symbols.Variable(ve.Name) != nil {
+					continue
+				}
+				if _, isShellLocal := shellLocals[ve.Name]; isShellLocal {
 					continue
 				}
 				out = append(out, Diagnostic{
@@ -219,6 +245,56 @@ func unresolvedVariables(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnosti
 		}
 	})
 	return out
+}
+
+// shellAssignments returns every name assigned via `name=value` in s,
+// reading tokens from the start of the string up to the first
+// non-assignment token. This mirrors bash env-prefix semantics —
+// `GOOS=linux GOARCH=amd64 go build` declares GOOS and GOARCH but not
+// anything after `go`. Quoted values aren't parsed; the heuristic
+// treats the LHS up to `=` as a name and skips the rest of the token.
+func shellAssignments(s string) []string {
+	var out []string
+	i := 0
+	for i < len(s) {
+		for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+			i++
+		}
+		if i >= len(s) {
+			break
+		}
+		if !isShellIdentStart(s[i]) {
+			return out
+		}
+		start := i
+		for i < len(s) && isShellIdentByte(s[i]) {
+			i++
+		}
+		if i >= len(s) || s[i] != '=' {
+			return out
+		}
+		out = append(out, s[start:i])
+		for i < len(s) && s[i] != ' ' && s[i] != '\t' {
+			i++
+		}
+	}
+	return out
+}
+
+func isShellIdentStart(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z':
+		return true
+	case b >= 'A' && b <= 'Z':
+		return true
+	case b == '_':
+		return true
+	}
+	return false
+}
+
+func isShellIdentByte(b byte) bool {
+	return isShellIdentStart(b) || (b >= '0' && b <= '9')
 }
 
 // forEachTask walks every task in qf, yielding its fully-qualified
