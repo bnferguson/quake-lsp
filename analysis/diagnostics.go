@@ -45,6 +45,12 @@ type Diagnostic struct {
 	// VarName are emitted in source order, so the Nth diagnostic
 	// corresponds to the Nth occurrence in the task body.
 	VarName string
+
+	// DepName, when non-empty, names a task-dependency token a
+	// consumer should narrow Position to. The token sits in the
+	// `=> ...` list of the task at Position. Same Nth-occurrence
+	// contract as VarName.
+	DepName string
 }
 
 // Diagnose builds a SymbolTable and returns every structural problem
@@ -117,6 +123,7 @@ func undefinedDependencies(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnos
 					Severity: SeverityError,
 					Message:  fmt.Sprintf("task %q depends on undefined task %q", fqn, dep),
 					Position: t.Position,
+					DepName:  dep,
 				})
 			}
 		}

@@ -89,24 +89,25 @@ func (d *document) diagnostics() []protocol.Diagnostic {
 		return nil
 	}
 
-	// Unresolved-variable diagnostics anchor on the containing task
-	// because the parser zeros command-element positions. We narrow
-	// to each "$VarName" by consuming scan results front-to-front, so
-	// two `$missing` references in the same task get distinct ranges.
+	// Diagnostics that anchor on a task's Position carry an optional
+	// hint identifying the token a consumer should narrow to. We
+	// consume scan results front-to-front per (task, name, kind),
+	// so repeated references in one task get distinct ranges.
 	type narrowKey struct {
 		taskStart int
 		name      string
+		kind      narrowKind
 	}
 	pending := map[narrowKey][]span{}
 
 	out := make([]protocol.Diagnostic, 0, len(analysisDiags))
 	for _, diag := range analysisDiags {
 		rng := d.lines.rangeOf(diag.Position)
-		if diag.VarName != "" {
-			key := narrowKey{taskStart: diag.Position.Start, name: diag.VarName}
-			refs, ok := pending[key]
-			if !ok {
-				refs = scanVariableRefs(d.text, diag.Position.Start, diag.Position.End, diag.VarName)
+		if name, kind, ok := narrowHint(diag); ok {
+			key := narrowKey{taskStart: diag.Position.Start, name: name, kind: kind}
+			refs, cached := pending[key]
+			if !cached {
+				refs = scanForNarrow(d.text, diag.Position, name, kind)
 			}
 			if len(refs) > 0 {
 				rng = d.rangeOfSpan(refs[0])
@@ -123,6 +124,38 @@ func (d *document) diagnostics() []protocol.Diagnostic {
 		})
 	}
 	return out
+}
+
+// narrowKind discriminates the scan strategy for a diagnostic that
+// asked to be narrowed.
+type narrowKind int
+
+const (
+	narrowVariable narrowKind = iota + 1
+	narrowDependency
+)
+
+// narrowHint extracts the token and scan kind a diagnostic asks to
+// be narrowed against, or reports ok=false when the diagnostic
+// should keep its original Position.
+func narrowHint(d analysis.Diagnostic) (name string, kind narrowKind, ok bool) {
+	switch {
+	case d.VarName != "":
+		return d.VarName, narrowVariable, true
+	case d.DepName != "":
+		return d.DepName, narrowDependency, true
+	}
+	return "", 0, false
+}
+
+func scanForNarrow(src string, pos parser.Position, name string, kind narrowKind) []span {
+	switch kind {
+	case narrowVariable:
+		return scanVariableRefs(src, pos.Start, pos.End, name)
+	case narrowDependency:
+		return scanDependencyRefs(src, pos, name)
+	}
+	return nil
 }
 
 // documentSymbols returns a hierarchical outline for the current
