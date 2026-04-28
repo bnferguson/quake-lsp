@@ -78,6 +78,47 @@ task build {
 	require.Equal(t, SeverityWarning, unresolved[0].Severity)
 }
 
+func TestDiagnose_ShellLocalAssignmentsAreInScope(t *testing.T) {
+	// `name=value` inside a task body is a shell-local assignment.
+	// References later in the same task should resolve against it
+	// rather than being flagged as undefined.
+	qf := mustParse(t, `
+task build {
+    commit=$(git rev-parse HEAD)
+    ldflags="-X main.commit=$commit"
+    go build -ldflags "$ldflags"
+}
+`)
+	require.Empty(t, Diagnose(qf))
+}
+
+func TestDiagnose_ShellEnvPrefixAssignmentsAreInScope(t *testing.T) {
+	// "GOOS=linux GOARCH=amd64 go build" is bash env-prefix syntax —
+	// every name=value before the actual command word is a shell
+	// assignment.
+	qf := mustParse(t, `
+task ship {
+    GOOS=linux GOARCH=amd64 go build -o build/app
+    echo "$GOOS $GOARCH"
+}
+`)
+	require.Empty(t, Diagnose(qf))
+}
+
+func TestDiagnose_ShellLocalForwardReferenceWarns(t *testing.T) {
+	// Reference before assignment is still undefined at the point of
+	// use — bash would expand it to an empty string.
+	qf := mustParse(t, `
+task build {
+    echo $foo
+    foo=bar
+}
+`)
+	unresolved := filterBySeverityMsg(Diagnose(qf), "undefined variable")
+	require.Len(t, unresolved, 1)
+	require.Contains(t, unresolved[0].Message, `"foo"`)
+}
+
 func TestDiagnose_TaskArgumentsDoNotWarn(t *testing.T) {
 	qf := mustParse(t, `
 task deploy(env) {

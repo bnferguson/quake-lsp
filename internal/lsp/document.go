@@ -89,10 +89,34 @@ func (d *document) diagnostics() []protocol.Diagnostic {
 		return nil
 	}
 
+	// Unresolved-variable diagnostics anchor on the containing task
+	// because the parser zeros command-element positions. We narrow
+	// to each "$VarName" by consuming scan results front-to-front, so
+	// two `$missing` references in the same task get distinct ranges.
+	type narrowKey struct {
+		taskStart int
+		name      string
+	}
+	pending := map[narrowKey][]span{}
+
 	out := make([]protocol.Diagnostic, 0, len(analysisDiags))
 	for _, diag := range analysisDiags {
+		rng := d.lines.rangeOf(diag.Position)
+		if diag.VarName != "" {
+			key := narrowKey{taskStart: diag.Position.Start, name: diag.VarName}
+			refs, ok := pending[key]
+			if !ok {
+				refs = scanVariableRefs(d.text, diag.Position.Start, diag.Position.End, diag.VarName)
+			}
+			if len(refs) > 0 {
+				rng = d.rangeOfSpan(refs[0])
+				pending[key] = refs[1:]
+			} else {
+				pending[key] = refs
+			}
+		}
 		out = append(out, protocol.Diagnostic{
-			Range:    d.lines.rangeOf(diag.Position),
+			Range:    rng,
 			Severity: severityPtr(toLSPSeverity(diag.Severity)),
 			Source:   &source,
 			Message:  diag.Message,

@@ -44,6 +44,52 @@ task build => missing {
 	require.True(t, found, "undefined-dependency diagnostic is reported")
 }
 
+func TestDocument_DiagnosticsUnresolvedVariableNarrowsToReference(t *testing.T) {
+	// The parser leaves command-element positions zeroed, so the
+	// analysis layer anchors unresolved-variable diagnostics on the
+	// containing task. The LSP layer is expected to narrow back to the
+	// `$NAME` token so the editor underlines just the reference, not
+	// the whole task body.
+	src := "task build {\n" +
+		"    echo building $UNKNOWN\n" +
+		"}\n"
+	d := parse(testURI, src, 1)
+
+	diags := d.diagnostics()
+	var diag *protocol.Diagnostic
+	for i := range diags {
+		if strings.Contains(diags[i].Message, `"UNKNOWN"`) {
+			diag = &diags[i]
+			break
+		}
+	}
+	require.NotNil(t, diag, "expected a diagnostic for undefined $UNKNOWN")
+	require.Equal(t, "UNKNOWN", sliceByRange(src, diag.Range), "diagnostic range covers just the variable name")
+}
+
+func TestDocument_DiagnosticsUnresolvedVariableHandlesRepeatedReferences(t *testing.T) {
+	// Two `$missing` references inside the same task should produce
+	// two distinct, narrowly-scoped diagnostics — not two diagnostics
+	// that overlap on the same span.
+	src := "task build {\n" +
+		"    echo first $missing\n" +
+		"    echo second $missing\n" +
+		"}\n"
+	d := parse(testURI, src, 1)
+
+	var ranges []protocol.Range
+	for _, diag := range d.diagnostics() {
+		if strings.Contains(diag.Message, `"missing"`) {
+			ranges = append(ranges, diag.Range)
+		}
+	}
+	require.Len(t, ranges, 2)
+	require.NotEqual(t, ranges[0], ranges[1], "each occurrence gets its own range")
+	for _, r := range ranges {
+		require.Equal(t, "missing", sliceByRange(src, r))
+	}
+}
+
 func TestDocument_DiagnosticsEmptyForCleanFile(t *testing.T) {
 	src := `
 VERSION = "1.0.0"
