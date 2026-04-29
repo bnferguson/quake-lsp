@@ -150,6 +150,37 @@ task build {
 	require.Contains(t, unresolved[0].Message, `"foo"`)
 }
 
+func TestDiagnose_ShellEnvVarsAreInScope(t *testing.T) {
+	// $HOME, $PATH, $USER, and $CI are inherited from the calling
+	// shell, not declared in the Quakefile. They show up in nearly
+	// every real task, and the analyzer flagging them as undefined
+	// drowns the user in noise. A small built-in allowlist of
+	// POSIX/standard env vars plus common CI vars covers the common
+	// case without modeling the shell's environment.
+	qf := mustParse(t, `
+task release {
+    echo "publishing as $USER from $HOME"
+    cp build/iso "$HOME/bin/iso"
+    if [ -n "$CI" ]; then echo "running on CI"; fi
+    PATH="$HOME/.local/bin:$PATH" go build ./...
+}
+`)
+	require.Empty(t, Diagnose(qf))
+}
+
+func TestDiagnose_NonAllowlistedShellVarStillWarns(t *testing.T) {
+	// Allowlist covers known-stable env vars only; an unknown name
+	// like $TYPO is still flagged so typos don't slip through.
+	qf := mustParse(t, `
+task build {
+    echo $TYPO_GOES_HERE
+}
+`)
+	unresolved := filterBySeverityMsg(Diagnose(qf), "undefined variable")
+	require.Len(t, unresolved, 1)
+	require.Contains(t, unresolved[0].Message, `"TYPO_GOES_HERE"`)
+}
+
 func TestDiagnose_TaskArgumentsDoNotWarn(t *testing.T) {
 	qf := mustParse(t, `
 task deploy(env) {
