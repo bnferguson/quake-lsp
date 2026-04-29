@@ -37,6 +37,37 @@ task c => a {}
 	require.Contains(t, cycleDiags[0].Message, "c")
 }
 
+func TestDiagnose_DependencyCycleAnchorsOnBackEdge(t *testing.T) {
+	// Cycle a -> b -> c -> a. The diagnostic should anchor on the
+	// task that *closes* the cycle (c) and name the back-edge target
+	// (a) in DepName, so the LSP layer can narrow the squiggle to the
+	// `a` token in `task c => a`.
+	qf := mustParse(t, `
+task a => b {}
+task b => c {}
+task c => a {}
+`)
+	diags := Diagnose(qf)
+
+	cycleDiags := filterBySeverityMsg(diags, "dependency cycle")
+	require.Len(t, cycleDiags, 1)
+	diag := cycleDiags[0]
+	require.Equal(t, "a", diag.DepName, "DepName names the back-edge target")
+
+	taskC := BuildSymbolTable(qf).Task("c")
+	require.NotNil(t, taskC)
+	require.Equal(t, taskC.Position, diag.Position, "diagnostic anchors on the closing task, not the cycle's first node")
+}
+
+func TestDiagnose_SelfCycleAnchorsOnTask(t *testing.T) {
+	qf := mustParse(t, `task loop => loop {}`)
+	diags := Diagnose(qf)
+
+	cycleDiags := filterBySeverityMsg(diags, "dependency cycle")
+	require.Len(t, cycleDiags, 1)
+	require.Equal(t, "loop", cycleDiags[0].DepName)
+}
+
 func TestDiagnose_CycleReportedOnceRegardlessOfEntryPoint(t *testing.T) {
 	// Three-node cycle. DFS will visit a, b, c in sorted order, but
 	// the canonical cycleKey must collapse the repeated discovery
