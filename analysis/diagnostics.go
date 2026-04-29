@@ -250,7 +250,7 @@ func unresolvedVariables(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnosti
 				if !ok {
 					continue
 				}
-				for _, name := range shellAssignments(se.Value) {
+				for _, name := range shellBindings(se.Value) {
 					shellLocals[name] = struct{}{}
 				}
 			}
@@ -280,6 +280,28 @@ func unresolvedVariables(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnosti
 			}
 		}
 	})
+	return out
+}
+
+// shellBindings returns every variable name a shell command in s
+// brings into scope:
+//
+//   - `name=value` env-prefix assignments (shellAssignments).
+//   - `for IDENT [in ...]` loop variables.
+//   - `read [-flags] X Y Z` builtin targets.
+//
+// The shell isn't actually parsed; each helper looks for its
+// keyword as a whitespace-bounded word and reads the obvious tokens
+// that follow. The heuristic biases toward binding a name when in
+// doubt — accidentally silencing a warning is preferable to flagging
+// a clearly-defined loop variable. A `read` invocation that splits
+// across multiple StringElements (e.g. an interpolated prompt like
+// `read -p "$prompt" name`) is only scanned in the segment that
+// contains the keyword, so the trailing target name may be missed.
+func shellBindings(s string) []string {
+	out := shellAssignments(s)
+	out = append(out, forLoopBindings(s)...)
+	out = append(out, readBindings(s)...)
 	return out
 }
 
@@ -331,6 +353,119 @@ func isShellIdentStart(b byte) bool {
 
 func isShellIdentByte(b byte) bool {
 	return isShellIdentStart(b) || (b >= '0' && b <= '9')
+}
+
+// forLoopBindings finds every `for IDENT` clause in s and returns
+// the loop-variable names. Handles `for X`, `for X in ...`, and
+// `for X; do ...`. Multiple loops in one string accumulate, so
+// `for i in a b; do for j in c d` binds both i and j.
+func forLoopBindings(s string) []string {
+	var out []string
+	for i := 0; i < len(s); {
+		end := nextWord(s, "for", i)
+		if end < 0 {
+			return out
+		}
+		j := skipBlanks(s, end)
+		if j < len(s) && isShellIdentStart(s[j]) {
+			start := j
+			for j < len(s) && isShellIdentByte(s[j]) {
+				j++
+			}
+			out = append(out, s[start:j])
+		}
+		i = j
+		if i == end {
+			i = end + 1
+		}
+	}
+	return out
+}
+
+// readBindings finds every `read` builtin invocation in s and
+// returns the names it binds. Stops at separators that end the
+// statement (`<`, `>`, `;`, `|`, `&`). Skips `-flag` tokens whether
+// or not they take an argument; `read -p PROMPT name` therefore
+// binds both PROMPT and name. That's a deliberate over-bind — the
+// canonical bash idiom for prompts is exactly this shape, so
+// silencing a spurious warning beats flagging a real binding.
+func readBindings(s string) []string {
+	var out []string
+	for i := 0; i < len(s); {
+		end := nextWord(s, "read", i)
+		if end < 0 {
+			return out
+		}
+		j := end
+		for {
+			j = skipBlanks(s, j)
+			if j >= len(s) {
+				break
+			}
+			c := s[j]
+			if c == ';' || c == '|' || c == '&' || c == '<' || c == '>' {
+				break
+			}
+			if c == '-' {
+				for j < len(s) && s[j] != ' ' && s[j] != '\t' {
+					j++
+				}
+				continue
+			}
+			if !isShellIdentStart(c) {
+				break
+			}
+			start := j
+			for j < len(s) && isShellIdentByte(s[j]) {
+				j++
+			}
+			out = append(out, s[start:j])
+		}
+		i = j
+		if i == end {
+			i = end + 1
+		}
+	}
+	return out
+}
+
+// nextWord returns the byte index just past the next occurrence of
+// word in s[start:] where word appears as a whitespace/control-
+// bounded shell token. Returns -1 when no such occurrence exists.
+func nextWord(s, word string, start int) int {
+	for i := start; i+len(word) <= len(s); i++ {
+		if s[i:i+len(word)] != word {
+			continue
+		}
+		if i > 0 && !isShellWordSep(s[i-1]) {
+			continue
+		}
+		end := i + len(word)
+		if end < len(s) && !isShellWordSep(s[end]) {
+			continue
+		}
+		return end
+	}
+	return -1
+}
+
+func skipBlanks(s string, i int) int {
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	return i
+}
+
+// isShellWordSep reports whether b ends a shell word inside a
+// single command segment. Newlines aren't included because the
+// parser splits commands on them — a per-command string never
+// contains one.
+func isShellWordSep(b byte) bool {
+	switch b {
+	case ' ', '\t', ';', '|', '&':
+		return true
+	}
+	return false
 }
 
 // forEachTask walks every task in qf, yielding its fully-qualified

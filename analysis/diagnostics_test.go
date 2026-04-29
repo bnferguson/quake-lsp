@@ -136,6 +136,51 @@ task ship {
 	require.Empty(t, Diagnose(qf))
 }
 
+func TestDiagnose_ForLoopBindingsAreInScope(t *testing.T) {
+	// `for X in ...; do` brings X into scope for the loop body and any
+	// subsequent commands in the same task. Skipping this leaves real
+	// Quakefiles with phantom warnings on the loop variable.
+	qf := mustParse(t, `
+task lint {
+    for f in *.go; do
+        echo "checking $f"
+    done
+}
+`)
+	require.Empty(t, Diagnose(qf))
+}
+
+func TestDiagnose_ReadBuiltinBindingsAreInScope(t *testing.T) {
+	// `read -r name < file` and `while read -r line; do ... done` both
+	// bind their target names. Multi-target reads bind every name.
+	qf := mustParse(t, `
+task ingest {
+    read -r name < name.txt
+    echo "hello $name"
+
+    while read -r line; do
+        echo "got $line"
+    done < notes.txt
+
+    read -r first second third < parts.txt
+    echo "$first $second $third"
+}
+`)
+	require.Empty(t, Diagnose(qf))
+}
+
+func TestDiagnose_NestedForLoopBindingsAccumulate(t *testing.T) {
+	// Two for-loop bindings on one line both go into scope.
+	qf := mustParse(t, `
+task cross {
+    for os in linux darwin; do for arch in amd64 arm64; do
+        echo "$os/$arch"
+    done; done
+}
+`)
+	require.Empty(t, Diagnose(qf))
+}
+
 func TestDiagnose_ShellLocalForwardReferenceWarns(t *testing.T) {
 	// Reference before assignment is still undefined at the point of
 	// use — bash would expand it to an empty string.
