@@ -1,0 +1,30 @@
+# Bug: expression syntax `{{...}}` inside a quoted string is silently
+# treated as literal text. The LSP could warn, since this is almost
+# always a mistake in a Quakefile.
+#
+# At runtime, $INSTALL_DIR below resolves to the literal seven-char
+# string "{{env.HOME}}/bin" — not the user's home directory. A
+# `mkdir -p $INSTALL_DIR` will create a directory named
+# "{{env.HOME}}" in the current working directory. Surprising.
+#
+# Working alternatives are a backtick subshell at declaration time:
+#     INSTALL_DIR = `echo "$HOME/bin"`
+# or a bare expression with the suffix appended at use site:
+#     HOME_DIR = {{env.HOME}}
+#     ...
+#     mkdir -p $HOME_DIR/bin
+# (You can't write `{{env.HOME}}/bin` directly — the grammar only
+# accepts a single expression OR a single quoted string OR a single
+# backtick as the value, no concatenation.)
+#
+# Expected: a warning that `{{...}}` is being treated as literal
+# text, suggesting the unquoted or backtick form.
+# Actual: no diagnostic — the typo silently survives until you run
+# the task.
+
+INSTALL_DIR = "{{env.HOME}}/bin"
+
+task install {
+    mkdir -p $INSTALL_DIR
+    echo "would install to $INSTALL_DIR"
+}

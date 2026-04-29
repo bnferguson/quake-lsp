@@ -1,0 +1,27 @@
+# Bug: shell constructs that bind locals other than `name=value`
+# aren't recognized.
+#
+# The shell-local heuristic in `unresolvedVariables` only catches
+# leading `name=value` tokens (env-prefix form). It misses:
+#   - `for f in ...; do ...` — $f is a loop-bound local
+#   - `read VAR < file`     — $VAR is bound by the read builtin
+#   - `while read -r line`  — same family
+#
+# All of these expand correctly at runtime; the analyzer flags
+# them anyway.
+#
+# Expected: no diagnostics.
+# Actual: $f, $line, and $name all warn as undefined.
+
+task lint {
+    for f in *.go; do
+        echo "checking $f"
+    done
+
+    while read -r line; do
+        echo "got $line"
+    done < notes.txt
+
+    read -r name < name.txt
+    echo "hello $name"
+}
