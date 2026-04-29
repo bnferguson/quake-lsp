@@ -192,10 +192,26 @@ func dependencyCycles(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnostic {
 	return out
 }
 
+// isShellEnvVar reports whether name is in the built-in allowlist of
+// environment variables inherited from the calling shell. These show
+// up in nearly every real Quakefile, and flagging them drowns the
+// user in noise. The list is intentionally tight: POSIX-standard
+// names plus the GitHub Actions vars most likely to show up in
+// CI-aware tasks. Extend conservatively — a missed name is a
+// one-line warning, an over-broad list silently swallows typos.
+func isShellEnvVar(name string) bool {
+	switch name {
+	case "HOME", "PATH", "USER", "PWD", "SHELL", "LANG", "EDITOR",
+		"CI", "GITHUB_TOKEN", "GITHUB_ACTIONS", "RUNNER_OS":
+		return true
+	}
+	return false
+}
+
 // unresolvedVariables reports every $VAR reference in a task command
 // that does not resolve to a declared Quake variable, a task
-// argument, or a shell-local assignment from an earlier command in
-// the same task.
+// argument, a shell-local assignment from an earlier command in the
+// same task, or a name in the built-in shell-env allowlist.
 //
 // Shell-locals are recognized heuristically: a leading
 // `IDENT=value` token in any command's flat string is treated as
@@ -204,9 +220,12 @@ func dependencyCycles(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnostic {
 // `GOOS=linux GOARCH=amd64 go build ...` without modeling the
 // shell's full grammar.
 //
-// Environment lookups (${VAR} at shell level, {{env.X}} in
-// expressions) are deliberately ignored — their values are runtime
-// concerns. See the LSP_PLAN "Open questions" section.
+// Environment lookups via expression syntax ({{env.X}}) are
+// deliberately ignored — their values are runtime concerns. Shell
+// `$VAR` references whose names sit in the built-in allowlist (see
+// isShellEnvVar) are silenced for the same reason: the analyzer
+// can't see the calling shell's environment, so it trusts a curated
+// list for the names that always show up.
 //
 // Because parser.VariableElement positions are currently zeroed
 // inside task commands, diagnostics anchor on the containing task's
@@ -247,6 +266,9 @@ func unresolvedVariables(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnosti
 					continue
 				}
 				if _, isShellLocal := shellLocals[ve.Name]; isShellLocal {
+					continue
+				}
+				if isShellEnvVar(ve.Name) {
 					continue
 				}
 				out = append(out, Diagnostic{
