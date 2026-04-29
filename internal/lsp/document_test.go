@@ -83,6 +83,30 @@ func TestDocument_DiagnosticsUndefinedDepHandlesMultipleInOneTask(t *testing.T) 
 	require.ElementsMatch(t, []string{"alpha", "beta"}, got)
 }
 
+func TestDocument_DiagnosticsDepCycleNarrowsToBackEdge(t *testing.T) {
+	// Cycle a -> b -> c -> a. The dep-cycle diagnostic should narrow
+	// to the back-edge dep token — the `a` in `task c => a` — instead
+	// of underlining whichever task DFS happened to enter first.
+	src := "task a => b {\n    echo a\n}\n" +
+		"task b => c {\n    echo b\n}\n" +
+		"task c => a {\n    echo c\n}\n"
+	d := parse(testURI, src, 1)
+
+	diags := d.diagnostics()
+	var diag *protocol.Diagnostic
+	for i := range diags {
+		if strings.Contains(diags[i].Message, "dependency cycle") {
+			diag = &diags[i]
+			break
+		}
+	}
+	require.NotNil(t, diag, "expected a dependency-cycle diagnostic")
+	require.Equal(t, "a", sliceByRange(src, diag.Range), "diagnostic range covers just the back-edge dep token")
+
+	// The back-edge lives in `task c => a`, line 6 (0-indexed) of src.
+	require.Equal(t, protocol.UInteger(6), diag.Range.Start.Line)
+}
+
 func TestDocument_DiagnosticsUnresolvedVariableNarrowsToReference(t *testing.T) {
 	// The parser leaves command-element positions zeroed, so the
 	// analysis layer anchors unresolved-variable diagnostics on the

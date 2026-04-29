@@ -135,6 +135,11 @@ func undefinedDependencies(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnos
 // walks the dependency graph via DFS with white/gray/black coloring,
 // and uses rotation-canonical cycle keys so the same cycle found at
 // different entry points collapses to a single report.
+//
+// Each diagnostic anchors on the task that *closes* the cycle (the
+// last node in the discovered path) and names the back-edge target
+// in DepName, so a consumer can narrow the squiggle to the exact
+// dep token that creates the loop.
 func dependencyCycles(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnostic {
 	graph := buildDepGraph(qf, symbols)
 
@@ -162,10 +167,12 @@ func dependencyCycles(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnostic {
 					continue
 				}
 				seen[key] = true
+				closing := cycle[len(cycle)-1]
 				out = append(out, Diagnostic{
 					Severity: SeverityError,
 					Message:  fmt.Sprintf("dependency cycle: %s", strings.Join(append(cycle, cycle[0]), " -> ")),
-					Position: symbols.Task(cycle[0]).Position,
+					Position: symbols.Task(closing).Position,
+					DepName:  cycle[0],
 				})
 			}
 		}
