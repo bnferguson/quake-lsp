@@ -226,6 +226,67 @@ task build {
 	require.Contains(t, unresolved[0].Message, `"TYPO_GOES_HERE"`)
 }
 
+func TestDiagnose_QuotedExpressionInVariableWarns(t *testing.T) {
+	// The Quake grammar doesn't interpolate {{...}} inside a quoted
+	// string — the expression survives as literal text into the
+	// runtime. That's almost always a mistake, so we warn.
+	qf := mustParse(t, `
+INSTALL_DIR = "{{env.HOME}}/bin"
+
+task install {
+    mkdir -p $INSTALL_DIR
+}
+`)
+	diags := filterBySeverityMsg(Diagnose(qf), "quoted string")
+	require.Len(t, diags, 1)
+	require.Contains(t, diags[0].Message, `"INSTALL_DIR"`)
+	require.Equal(t, SeverityWarning, diags[0].Severity)
+}
+
+func TestDiagnose_BareExpressionVariableDoesNotWarn(t *testing.T) {
+	// Bare `{{env.HOME}}` (no surrounding quotes) is a parsed
+	// expression, not a string — interpolation works correctly.
+	qf := mustParse(t, `
+HOME_DIR = {{env.HOME}}
+
+task show {
+    echo $HOME_DIR
+}
+`)
+	require.Empty(t, filterBySeverityMsg(Diagnose(qf), "quoted string"))
+}
+
+func TestDiagnose_PlainQuotedStringDoesNotWarn(t *testing.T) {
+	qf := mustParse(t, `
+PROJECT = "quake"
+
+task show {
+    echo $PROJECT
+}
+`)
+	require.Empty(t, Diagnose(qf))
+}
+
+func TestDiagnose_BacktickValueDoesNotWarn(t *testing.T) {
+	// Backtick subshells are out of scope for this diagnostic — the
+	// grammar treats their bodies as shell code, and {{...}} inside
+	// them is its own (rarer) bug class.
+	qf := mustParse(t, "VERSION = `echo {{env.HOME}}`\n")
+	require.Empty(t, filterBySeverityMsg(Diagnose(qf), "quoted string"))
+}
+
+func TestDiagnose_QuotedExpressionInsideNamespaceWarns(t *testing.T) {
+	// The walk should descend into namespaces.
+	qf := mustParse(t, `
+namespace deploy {
+    TARGET = "{{env.RUNNER_OS}}-amd64"
+}
+`)
+	diags := filterBySeverityMsg(Diagnose(qf), "quoted string")
+	require.Len(t, diags, 1)
+	require.Contains(t, diags[0].Message, `"deploy:TARGET"`)
+}
+
 func TestDiagnose_TaskArgumentsDoNotWarn(t *testing.T) {
 	qf := mustParse(t, `
 task deploy(env) {

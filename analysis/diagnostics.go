@@ -61,6 +61,8 @@ type Diagnostic struct {
 //   - duplicate declaration at the same fully-qualified name
 //   - unresolved variable reference in a task command (`echo $UNKNOWN`
 //     where UNKNOWN is not a declared variable or a task argument)
+//   - {{...}} expression embedded in a quoted-string variable value,
+//     which the grammar treats as literal text
 //
 // Callers that need the SymbolTable afterward should use DiagnoseWith
 // to avoid rebuilding it.
@@ -84,6 +86,7 @@ func DiagnoseWith(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnostic {
 	diagnostics = append(diagnostics, undefinedDependencies(qf, symbols)...)
 	diagnostics = append(diagnostics, dependencyCycles(qf, symbols)...)
 	diagnostics = append(diagnostics, unresolvedVariables(qf, symbols)...)
+	diagnostics = append(diagnostics, quotedExpressions(qf)...)
 
 	sort.SliceStable(diagnostics, func(i, j int) bool {
 		a, b := diagnostics[i], diagnostics[j]
@@ -129,6 +132,53 @@ func undefinedDependencies(qf *parser.QuakeFile, symbols *SymbolTable) []Diagnos
 		}
 	})
 	return out
+}
+
+// quotedExpressions reports variables whose value is a quoted
+// string containing a `{{...}}` expression. The Quake grammar
+// accepts only a single expression, a single quoted string, or a
+// single backtick as a variable value — no concatenation — so the
+// `{{...}}` inside the quoted form is never interpolated. It
+// survives as literal text into the runtime, which is almost
+// always a mistake.
+//
+// Working alternatives suggested in the message:
+//
+//	INSTALL_DIR = `echo "$HOME/bin"`   # backtick subshell
+//	HOME_DIR    = {{env.HOME}}         # bare expression, append at use site
+//
+// Variables flagged as expressions (IsExpression) or as backtick
+// substitutions (CommandSubstitution) are skipped — the former is
+// already a parsed expression, the latter is shell code where
+// `{{...}}` has its own (rarer) failure mode.
+func quotedExpressions(qf *parser.QuakeFile) []Diagnostic {
+	var out []Diagnostic
+	forEachVariable(qf, "", func(fqn string, v *parser.Variable) {
+		if v.IsExpression || v.CommandSubstitution {
+			return
+		}
+		s, ok := v.Value.(string)
+		if !ok {
+			return
+		}
+		if !containsExpressionBraces(s) {
+			return
+		}
+		out = append(out, Diagnostic{
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("variable %q has a {{...}} expression inside a quoted string; expressions in quoted strings are not interpolated", fqn),
+			Position: v.Position,
+		})
+	})
+	return out
+}
+
+// containsExpressionBraces reports whether s contains a `{{...}}`
+// substring — `{{` followed somewhere later by `}}`. The body is
+// not validated.
+func containsExpressionBraces(s string) bool {
+	_, after, found := strings.Cut(s, "{{")
+	return found && strings.Contains(after, "}}")
 }
 
 // dependencyCycles reports one diagnostic per distinct cycle. It
@@ -488,6 +538,29 @@ func forEachTaskInNamespace(n *parser.Namespace, nsPrefix string, fn func(fqn st
 	}
 	for i := range n.Namespaces {
 		forEachTaskInNamespace(&n.Namespaces[i], name, fn)
+	}
+}
+
+// forEachVariable walks every variable declared in qf, yielding its
+// fully-qualified name and a pointer into the QuakeFile.
+func forEachVariable(qf *parser.QuakeFile, nsPrefix string, fn func(fqn string, v *parser.Variable)) {
+	for i := range qf.Variables {
+		v := &qf.Variables[i]
+		fn(qualify(nsPrefix, v.Name), v)
+	}
+	for i := range qf.Namespaces {
+		forEachVariableInNamespace(&qf.Namespaces[i], nsPrefix, fn)
+	}
+}
+
+func forEachVariableInNamespace(n *parser.Namespace, nsPrefix string, fn func(fqn string, v *parser.Variable)) {
+	name := qualify(nsPrefix, n.Name)
+	for i := range n.Variables {
+		v := &n.Variables[i]
+		fn(qualify(name, v.Name), v)
+	}
+	for i := range n.Namespaces {
+		forEachVariableInNamespace(&n.Namespaces[i], name, fn)
 	}
 }
 
